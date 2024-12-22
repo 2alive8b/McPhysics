@@ -1,0 +1,486 @@
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local SneakToggleEvent = ReplicatedStorage:WaitForChild("SneakToggle")
+local SendPacket = ReplicatedStorage.SendPacket
+local camera = game.Workspace.CurrentCamera
+local local2local = game.ReplicatedStorage.LocalToLocal
+local arrowTemplate = game.ReplicatedStorage.Arrow
+local holding = false
+local arrows = {} -- Table to track fired arrows and their velocities
+
+
+local KnockBack
+local RayHit
+local RayHitPlayer
+local victimPosition
+local bowCharge = 0
+local equippedItem = "None"
+
+-- Configuration values
+local McRbxRatio= 1/0.28
+local McRbxRatio2 = 1.408
+local tickConstant = 60
+local knockbackHorizontal = 0.35-- * MctoRBXratio * tickConstant
+local knockbackVertical = 0.35 --* MctoRBXratio* tickConstant
+local knockbackVerticalLimit = 0.4 --* MctoRBXratio* tickConstant
+local knockbackExtraHorizontal = 0.425-- * MctoRBXratio * tickConstant
+local knockbackExtraVertical = 0.085 --* MctoRBXratio* tickConstant
+local knockbackLevel = 0
+
+--wait()
+
+local function addLinVelToRig()
+	local rig =game.Workspace.RigR6
+	local rigRootPart = rig:FindFirstChild("HumanoidRootPart")
+
+	local linearVelocity = Instance.new("LinearVelocity")
+	linearVelocity.Attachment0 = rigRootPart:FindFirstChild("RootAttachment") or Instance.new("Attachment", rigRootPart)
+	linearVelocity.MaxForce = math.huge
+	linearVelocity.Parent = rigRootPart
+
+end
+
+
+local function calculateKB()
+	local VerticalKB = 1.429
+
+	-- Get the LinearVelocity instance from the rootPart
+	local linearVelocity = rootPart:FindFirstChild("LinearVelocity")
+	if not linearVelocity then
+		warn("LinearVelocity not found!")
+		return
+	end
+
+	-- Get the player's momentum
+	local playerMomentum = linearVelocity.VectorVelocity
+
+	local d0 = rootPart.CFrame.Position.X - victimPosition.X
+	local d1 = rootPart.CFrame.Position.Z - victimPosition.Z
+	local magnitude = math.sqrt(d0*d0+d1*d1)
+	print(d0/magnitude,d1/magnitude,magnitude)
+
+
+	-- Calculate addedKB using the player's facing direction (LookVector)
+
+	local playerFacingDirection = camera.CFrame.LookVector
+	print(playerFacingDirection.X, playerFacingDirection.Z)
+
+	local baseHorizontalKBX = (playerMomentum.X/2)/(tickConstant * McRbxRatio) - (d0/magnitude) * knockbackHorizontal
+	local baseHorizontalKBZ = (playerMomentum.Z/2)/(tickConstant * McRbxRatio) - (d1/magnitude) * knockbackHorizontal
+	local baseVerticalKB = (playerMomentum.Y/2)/(tickConstant * McRbxRatio) + knockbackVertical-- + knockbackExtraVertical
+	local baseKB = Vector3.new(baseHorizontalKBX,baseVerticalKB,baseHorizontalKBZ)
+
+
+	--Extra KB
+	local extraHorizontalKBX
+	local extraHorizontalKBZ
+	local extraVerticalKB
+	local extraKB
+
+	if knockbackLevel == 1 then
+		extraHorizontalKBX =  playerFacingDirection.X * knockbackExtraHorizontal
+		extraHorizontalKBZ =  playerFacingDirection.Z * knockbackExtraHorizontal
+		extraVerticalKB = knockbackExtraVertical
+		extraKB = Vector3.new(extraHorizontalKBX,extraVerticalKB,extraHorizontalKBZ)
+		knockbackLevel = 0
+
+	else
+		extraKB = Vector3.new(0,0,0)
+	end
+
+
+	-- Combine all knockback components
+	local totalKnockback = baseKB + extraKB
+
+	-- Apply vertical knockback limit
+	totalKnockback = Vector3.new(totalKnockback.X, math.min(totalKnockback.Y, knockbackVerticalLimit), totalKnockback.Z)
+	KnockBack = totalKnockback
+	-- Debugging: Output the knockback vector
+	print("KnockBack Vector:", totalKnockback)
+
+	--local addedKB = Vector3.new(playerFacingDirection.X, 0, playerFacingDirection.Z) * 0.4
+
+	-- Calculate the final KnockBack vector
+	--KnockBack = Vector3.new(playerMomentum.X / 2, VerticalKB, playerMomentum.Z / 2) + addedKB
+
+	-- Output the KnockBack vector for debugging
+	--print("KnockBack Vector:", KnockBack)
+
+	return KnockBack
+end
+
+
+
+--Bow initial velocity = 3blocks/mctick = 60blocks/s = 214,286 studs/s = 3,5714 studs/60tick
+
+-- Function to fire the arrow
+local function fireBow()
+	if bowCharge <15 then return end
+	if not arrowTemplate then return end -- Ensure the arrow template is defined
+	local firedArrow = arrowTemplate:Clone()
+
+	-- Add LinearVelocity to the fired arrow
+	local arrowVelocity = Instance.new("LinearVelocity")
+	local attachment = Instance.new("Attachment", firedArrow.PrimaryPart)
+	arrowVelocity.Attachment0 = attachment
+	arrowVelocity.MaxForce = math.huge
+	arrowVelocity.VectorVelocity = (camera.CFrame.LookVector).Unit * 60/0.28 * (bowCharge/66)-- Launch towards mouse target
+	arrowVelocity.Parent = firedArrow
+
+	-- Place the arrow in the workspace
+	firedArrow.Parent = workspace
+	local bowOffset = Vector3.new(0,1.1,0) -- might need a bit of tweaking
+	firedArrow.PrimaryPart.CFrame = CFrame.new(player.Character.HumanoidRootPart.Position + bowOffset + (camera.CFrame.LookVector).Unit*2)
+
+	-- Add the arrow and its velocity to the table
+	table.insert(arrows, {arrow = firedArrow, velocity = arrowVelocity, initialPosition = firedArrow.PrimaryPart.Position, distance = 0})
+	bowCharge = 0
+end
+
+-- RunService Heartbeat to slow down each arrow
+local targetInterval = 1 / 60 -- Target: 60 updates per second
+local timeAccumulator = 0 -- Tracks time between updates
+
+local function onArrowHit(arrow, linVel, arrowIndex)
+	local arrowData = arrows[arrowIndex] -- Access the arrow data
+	arrow.PrimaryPart.Touched:Connect(function(hit)
+
+		-- Ensure the arrow doesn't detect itself or parts of the same arrow
+		--arrow.CanTouch = false
+		if hit:IsDescendantOf(arrow) then return end
+		--print(hit)
+
+		if arrowData.hitProcessed then return end
+		arrowData.hitProcessed = true -- Mark this arrow as having hit something
+		-- Get the position where the arrow hit
+		--	local hitPosition = arrow.PrimaryPart.CFrame.Position
+
+		-- Check if the hit part belongs to a character
+		local hitPart = hit
+		local character = hitPart:FindFirstAncestorOfClass("Model") -- Find the model
+		if character and character:FindFirstChild("Humanoid") then -- Check if it has a Humanoid
+			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+			if humanoidRootPart then
+				print("Arrow hit a player!")
+				print("HumanoidRootPart found:", humanoidRootPart:GetFullName())
+
+				-- Fetch the player associated with the character
+				local Victim = game.Players:GetPlayerFromCharacter(character)
+				if Victim then
+					print("Player hit:", Victim.Name)
+
+
+
+					-- Get the victim's position
+					local victimPosition1 = humanoidRootPart.Position
+					print("Victim's position:", victimPosition)
+
+					local arrowVelocity = linVel.VectorVelocity
+					local arrowKBX = arrowVelocity.X/arrowVelocity.Magnitude * knockbackHorizontal
+					local arrowKBZ = arrowVelocity.Z/arrowVelocity.Magnitude * knockbackHorizontal
+					local arrowKBY = knockbackVertical
+					local arrowKB = Vector3.new(arrowKBX, arrowKBY, arrowKBZ)
+					--print("KnockBack Vector:", KnockBack)
+
+
+
+					local packet = {
+						["KnockBack"] = arrowKB,
+						["RayHit"] = hitPart,
+						["Player"] = Victim,
+						["VictimPosition"] = victimPosition1,
+						["Damage"] = 10
+					}
+					SendPacket:FireServer(packet)
+
+					-- Calculate the distance from the player to the victim
+					local playerCharacter = game.Players.LocalPlayer.Character
+					if playerCharacter then
+						local playerPosition = playerCharacter:FindFirstChild("HumanoidRootPart") and playerCharacter.HumanoidRootPart.Position
+						if playerPosition then
+							--local distance = (hitPosition - playerPosition).Magnitude
+							--print("Distance from player to victim:", distance)
+						end
+					end
+				end
+			else
+				print("HumanoidRootPart not found in character:", character.Name)
+			end
+		else
+			print("No player hit.")
+		end
+
+		-- Destroy the arrow and cleanup
+		linVel:Destroy()
+		arrow:Destroy()
+		table.remove(arrows, arrowIndex)
+	end)
+end
+
+
+
+
+
+RunService.Heartbeat:Connect(function(deltaTime)
+	timeAccumulator += deltaTime -- Accumulate elapsed time
+
+	-- Check if enough time has passed to update
+	while timeAccumulator >= targetInterval do
+
+		if holding == true then
+			if bowCharge < 66 then
+				bowCharge +=  1
+			end
+			--print(bowCharge)
+		end
+
+		for i = #arrows, 1, -1 do
+			local arrowData = arrows[i]
+			local arrow = arrowData.arrow
+			local linVel = arrowData.velocity
+
+
+
+			-- Get the current velocity
+			local velocity = linVel.VectorVelocity
+
+			-- Apply realistic physics calculations
+			local usableVelocityX = velocity.X / (tickConstant * McRbxRatio2)
+			local usableVelocityZ = velocity.Z / (tickConstant * McRbxRatio2)
+			local usableVelocityY = velocity.Y / (tickConstant * McRbxRatio2)
+
+			local newX = usableVelocityX * 0.99^(1/3)
+			local newZ = usableVelocityZ * 0.99^(1/3)
+			local newY = (usableVelocityY - 0.05 / 3) * 0.99^(1/3)
+
+			local newVelocity = Vector3.new(
+				newX * tickConstant * McRbxRatio2,
+				newY * tickConstant * McRbxRatio2,
+				newZ * tickConstant * McRbxRatio2
+			)
+
+			-- Update the LinearVelocity's Velocity with the new calculated value
+			linVel.VectorVelocity = newVelocity
+
+			-- Add collision handling
+			if not arrowData.collisionHandlerAdded then
+				arrowData.collisionHandlerAdded = true
+				onArrowHit(arrow, linVel, i)
+
+
+			end
+
+			-- Remove arrow from the table if its velocity becomes negligible or it no longer exists
+			if newVelocity.Magnitude < 0.1 or not arrow:IsDescendantOf(workspace) then
+				linVel:Destroy()
+				arrow:Destroy()
+				table.remove(arrows, i)
+			end
+		end
+
+		timeAccumulator -= targetInterval -- Subtract target interval
+	end
+end)
+
+
+
+local function rayCast()
+	-- Get the current camera
+
+
+	-- Calculate the ray origin (camera position) and direction
+	local rayOrigin = camera.CFrame.Position
+	local rayDirection = camera.CFrame.LookVector * 10.714
+
+	-- Fire the raycast
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+	raycastParams.FilterDescendantsInstances = {game.Players.LocalPlayer.Character} -- Exclude the player
+	local raycastResult = game.Workspace:Raycast(rayOrigin, rayDirection, raycastParams)
+
+	-- Visualize the ray
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.CanCollide = false
+	part.Material = Enum.Material.Neon
+	part.BrickColor = BrickColor.new("Bright red")
+	part.Size = Vector3.new(0.1, 0.1, (raycastResult and (raycastResult.Position - rayOrigin).Magnitude) or 10.714)
+	part.CFrame = CFrame.new(rayOrigin, rayOrigin + rayDirection) * CFrame.new(0, 0, -part.Size.Z / 2)
+	part.Parent = game.Workspace
+
+	-- Destroy the part after 0.5 seconds
+	game:GetService("Debris"):AddItem(part, 0.5)
+
+	-- Print the hit result
+	if raycastResult then
+		print("Hit:", raycastResult.Instance:GetFullName())
+
+		-- Find the HumanoidRootPart of the hit player
+		local hitPart = raycastResult.Instance
+		local character = hitPart:FindFirstAncestorOfClass("Model") -- Find the model
+		if character and character:FindFirstChild("Humanoid") then -- Check if it has a Humanoid
+			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+			if humanoidRootPart then
+				print("HumanoidRootPart found:", humanoidRootPart:GetFullName())
+				RayHit = humanoidRootPart
+				RayHitPlayer = Players:GetPlayerFromCharacter(character)
+				victimPosition = RayHit.CFrame.Position
+			else
+				print("HumanoidRootPart not found in character:", character.Name)
+			end
+		else
+			print("No character found for hit part.")
+		end
+	else
+		print("Nothing was hit.")
+	end
+end
+
+
+
+
+
+
+
+local function findrootpart()
+
+	local linVel = rootPart:WaitForChild("LinearVelocity")
+
+	if linVel then
+		print(linVel.Name.."linear velocity found")
+	else
+		warn("no linvel found")
+	end
+
+end
+
+
+--task.spawn(addLinVelToRig)
+
+
+
+local function onMouseButton1Press(input, gameProcessed)
+	-- Ensure the input is MouseButton1 and the event is not processed by the game
+	if input.UserInputType == Enum.UserInputType.MouseButton1 and not gameProcessed then
+		-- Call the calculateKB function when MB1 is pressed
+		rayCast()
+		calculateKB()
+
+		if RayHit then
+			print(RayHit)
+
+			-- Check if the hit object is part of a model with a Humanoid
+			local model = RayHit:FindFirstAncestorOfClass("Model")
+			if model and model:FindFirstChild("Humanoid") and model:FindFirstChild("HumanoidRootPart") then
+				local humanoid = model:FindFirstChild("Humanoid")
+				local rootPart = model:FindFirstChild("HumanoidRootPart")
+
+				-- Change color to red and store original color
+				for _, part in ipairs(model:GetDescendants()) do
+					if part:IsA("BasePart") then
+						if not part:FindFirstChild("OriginalColor") then
+							local originalColor = Instance.new("Color3Value")
+							originalColor.Name = "OriginalColor"
+							originalColor.Value = part.Color
+							originalColor.Parent = part
+						end
+						part.Color = Color3.new(1, 0, 0) -- Red color
+					end
+				end
+
+				-- Restore original color after a delay (e.g., 2 seconds)
+				task.delay(0.1, function()
+					for _, part in ipairs(model:GetDescendants()) do
+						if part:IsA("BasePart") and part:FindFirstChild("OriginalColor") then
+							part.Color = part.OriginalColor.Value
+							part.OriginalColor:Destroy() -- Clean up the stored original color
+						end
+					end
+				end)
+
+				-- Play a sound effect
+				local sound = Instance.new("Sound", workspace)
+				sound.SoundId = "rbxassetid://8766809464" -- Replace with your sound ID
+				sound.PlayOnRemove = true
+				sound:Destroy()
+
+				-- Send the knockback data packet
+				local packet = {
+					["KnockBack"] = KnockBack,
+					["RayHit"] = RayHit,
+					["Player"] = model, -- Using the model instead of a player object
+					["VictimPosition"] = rootPart.Position,
+					["Damage"] = 1
+				}
+				SendPacket:FireServer(packet)
+			else
+				print("No valid humanoid model was hit.")
+			end
+
+			RayHit = nil
+		else
+			print("No object was hit.")
+		end
+	end
+end
+
+
+
+
+-- Connect the input event
+UIS.InputBegan:Connect(onMouseButton1Press)
+
+
+local function updateKnockbackLevel()
+	-- Check if Shift is held
+	if UIS:IsKeyDown(Enum.KeyCode.LeftShift) or UIS:IsKeyDown(Enum.KeyCode.RightShift) then
+		knockbackLevel = 1 -- Shift is held
+	else
+		knockbackLevel = 0 -- Shift is not held
+	end
+end
+
+-- Connect input change events
+UIS.InputBegan:Connect(function(input, gameProcessed)
+
+	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+
+		if equippedItem == "Bow"  then
+			holding = true -- Start holding right mouse button
+			local2local:Fire(holding)
+		elseif equippedItem == "HealthPot" then
+			humanoid.Health += 20
+		end
+
+
+
+
+	elseif input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
+		knockbackLevel = 1 -- Shift pressed
+	end
+end)
+
+UIS.InputEnded:Connect(function(input, gameProcessed)
+	if input.UserInputType == Enum.UserInputType.MouseButton2 then
+		if equippedItem == "Bow" then
+			holding = false -- Release right mouse button
+			fireBow() -- Fire the arrow on release
+			local2local:Fire(holding)
+			warn("bowfired")
+
+
+		end
+
+
+	elseif input.KeyCode == Enum.KeyCode.LeftShift or input.KeyCode == Enum.KeyCode.RightShift then
+		knockbackLevel = 0 -- Shift released
+	end
+end)
+
+local2local:Fire(holding)
