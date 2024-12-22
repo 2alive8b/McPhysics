@@ -1,0 +1,376 @@
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local SneakToggleEvent = ReplicatedStorage:WaitForChild("SneakToggle")
+local SendPacket = ReplicatedStorage.SendPacket
+local local2local = game.ReplicatedStorage.LocalToLocal
+local linearVelocity = rootPart:FindFirstChild("LinearVelocity")
+local RunService = game:GetService("RunService")
+local linearVelocity = Instance.new("LinearVelocity")
+
+linearVelocity.Attachment0 = rootPart:FindFirstChild("RootAttachment") or Instance.new("Attachment", rootPart)
+linearVelocity.MaxForce = math.huge
+linearVelocity.Parent = rootPart
+
+-- Input Vars
+local wPressed = false
+local aPressed = false
+local sPressed = false
+local dPressed = false
+local spacePressed = false
+
+local status = "walking"
+local Mt = 1
+local St = 0.6
+local Et = 1
+local McRbxRatio = 1.408
+local tickConstant = 60
+
+local detPlayerDirection = Vector3.new(0, 0, 0)
+local velocity = Vector3.new(0, 0, 0)
+local yVelocity = 0
+local accelerationY = 0
+local jumping = false
+local canJump = true
+local knockBackTaken = nil
+
+
+local function checkCollisions()
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rootPart then return end
+
+	-- Directions in the player's local space (relative axes)
+	local directions = {
+		{name = "Forward", vector = Vector3.new(0, 0, 1)},  -- Local forward (Z)
+		{name = "Backward", vector = Vector3.new(0, 0, -1)}, -- Local backward (-Z)
+		{name = "Left", vector = Vector3.new(-1, 0, 0)},     -- Local left (-X)
+		{name = "Right", vector = Vector3.new(1, 0, 0)},     -- Local right (X)
+	}
+
+	-- Raycast parameters
+	local params = RaycastParams.new()
+	params.FilterDescendantsInstances = {character}
+	params.FilterType = Enum.RaycastFilterType.Exclude
+
+	local rayDistance = 3  -- Ray distance to detect collisions
+	local characterSize = Vector3.new(2, 5, 2) -- Approximate character size (adjust as needed)
+
+	-- Offsets for rays (cast rays at multiple points to form a "collision box")
+	local offsets = {
+		Vector3.new(0, 0, 0), -- Center
+		Vector3.new(-characterSize.X / 2, 0, 0), -- Left edge
+		Vector3.new(characterSize.X / 2, 0, 0), -- Right edge
+		Vector3.new(0, 0, -characterSize.Z / 2), -- Back edge
+		Vector3.new(0, 0, characterSize.Z / 2), -- Front edge
+	}
+
+	-- Adjusted velocity (start with the current velocity)
+	local moveDirection = velocity.Magnitude > 0 and velocity.Unit or Vector3.zero
+
+	for _, dir in ipairs(directions) do
+		local allBlocked = true -- Assume all rays in this direction are blocked
+		for _, offset in ipairs(offsets) do
+			-- Ray origin adjusted by offset
+			local origin = rootPart.Position + offset
+
+			-- Convert the local direction to world space using CFrame
+			local worldDirection = rootPart.CFrame:VectorToWorldSpace(dir.vector)
+
+			-- Cast the ray
+			local result = workspace:Raycast(origin, worldDirection * rayDistance, params)
+
+			-- If any ray in this direction is not blocked, we allow movement
+			if not result then
+				allBlocked = false
+				break
+			end
+		end
+
+		if allBlocked then
+			if dir.name == "Left" then
+				velocity = Vector3.new(if velocity.X < 0 then 0 else velocity.X, velocity.Y, velocity.Z)
+			elseif dir.name == "Right" then
+				velocity = Vector3.new(if velocity.X > 0 then 0 else velocity.X, velocity.Y, velocity.Z)-- Block X-axis velocity
+			elseif dir.name == "Forward" then
+				velocity = Vector3.new(velocity.X, velocity.Y, if velocity.Z < 0 then 0 else velocity.Z)  -- Block Z-axis velocity
+			elseif dir.name == "Backward" then
+				velocity = Vector3.new(velocity.X, velocity.Y, if velocity.Z > 0 then 0 else velocity.Z)  -- Block Z-axis velocity
+			end
+		end
+	end
+end
+
+
+
+local function isOnGround(character)
+	local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if rootPart then
+		local direction = Vector3.new(0, if status ~= "sneaking" then -3.8 else -3, 0)
+		local params = RaycastParams.new()
+		params.FilterDescendantsInstances = {character}
+		params.FilterType = Enum.RaycastFilterType.Exclude
+
+		local characterSize = Vector3.new(2, 7.1, 2)
+
+		local offsets = {
+			Vector3.new(0, 0, 0), -- Center
+			Vector3.new(-characterSize.X / 2, 0, -characterSize.Z / 2), -- Back-left
+			Vector3.new(characterSize.X / 2, 0, -characterSize.Z / 2), -- Back-right
+			Vector3.new(-characterSize.X / 2, 0, characterSize.Z / 2), -- Front-left
+			Vector3.new(characterSize.X / 2, 0, characterSize.Z / 2), -- Front-right
+		}
+
+		for _, offset in ipairs(offsets) do
+			local origin = rootPart.Position + offset
+			local result = workspace:Raycast(origin, direction, params)
+
+			if result then
+				canJump = true
+				return true
+			end
+		end
+
+		canJump = false
+		return false
+	end
+end
+
+
+
+
+
+local function calculateVelocity()
+	
+
+	if canJump and spacePressed then 
+		yVelocity = 0.42
+		jumping = true
+	end
+
+	accelerationY = (yVelocity - 0.08/3) * 0.98^(1/3)
+	if isOnGround(character) and not jumping  and not knockBackTaken then accelerationY = 0 end
+
+	local accelerationX = ((0.1*Mt*Et*(0.6/St)^3)/3)*detPlayerDirection.X
+	local accelerationZ = ((0.1*Mt*Et*(0.6/St)^3)/3)*detPlayerDirection.Z
+
+	if not isOnGround(character) and not jumping then
+		St = 1
+		accelerationX = ((0.02*Mt)/3)*detPlayerDirection.X
+		accelerationZ = ((0.02*Mt)/3)*detPlayerDirection.Z
+	end
+
+	if isOnGround(character) then St = 0.6 end
+
+	local momentumX = velocity.X*(St*0.91)^(1/3)
+	local momentumZ = velocity.Z*(St*0.91)^(1/3)
+
+	if math.abs(momentumX) < 0.005 then momentumX = 0 end
+	if math.abs(momentumZ) < 0.005 then momentumZ = 0 end
+
+	if jumping and status == "sprinting" then
+		accelerationX += 0.2*detPlayerDirection.X*0.28
+		accelerationZ += 0.2*detPlayerDirection.Z*0.28
+	end
+
+	velocity = Vector3.new(momentumX + accelerationX, 0, momentumZ + accelerationZ)
+	checkCollisions()
+	yVelocity = accelerationY
+
+	local finalVelocity = Vector3.new((velocity.X) * tickConstant * McRbxRatio, accelerationY*60*(1/(3*0.28)), (velocity.Z) * tickConstant * McRbxRatio)
+	linearVelocity.VectorVelocity = finalVelocity
+	jumping = false
+	knockBackTaken = nil
+	--print(finalVelocity)
+	
+end
+
+
+
+
+SendPacket.OnClientEvent:Connect(function(knockback, damage)
+	knockBackTaken = true
+	warn("KNOCKBACK RECIEVED!!!!", knockback)
+	--linearVelocity.VectorVelocity = knockback
+	velocity = Vector3.new(knockback.X,0,knockback.Z)
+	yVelocity = knockback.Y
+	
+	-- make the humanoid take the corresponding damage, needs to be sent in packet tho
+	
+	if damage then
+		humanoid.Health -= damage
+		warn(damage)
+	end
+	
+end)
+
+
+
+local function updateDirection()
+	local lookVector = Vector3.new(rootPart.CFrame.LookVector.X, 0, rootPart.CFrame.LookVector.Z).Unit
+	detPlayerDirection = Vector3.new(0, 0, 0)
+
+	if wPressed and not sPressed then
+		detPlayerDirection = detPlayerDirection + lookVector
+	elseif sPressed and not wPressed then
+		detPlayerDirection = detPlayerDirection - lookVector
+	end
+
+	local rightVector = Vector3.new(-lookVector.Z, 0, lookVector.X).Unit
+
+	if dPressed and not aPressed then
+		detPlayerDirection = detPlayerDirection + rightVector
+	elseif aPressed and not dPressed then
+		detPlayerDirection = detPlayerDirection - rightVector
+	end
+
+	if detPlayerDirection.Magnitude > 0 then
+		detPlayerDirection = detPlayerDirection.Unit
+	end
+end
+
+
+local targetInterval = 1 / 60 -- Target: 60 updates per second
+local timeAccumulator = 0 -- Tracks time between updates
+
+RunService.Heartbeat:Connect(function(deltaTime)
+	timeAccumulator += deltaTime -- Accumulate elapsed time
+
+	-- Check if enough time has passed to update
+	while timeAccumulator >= targetInterval do
+		calculateVelocity() -- Call your existing function
+		timeAccumulator -= targetInterval -- Subtract target interval
+	end
+
+	updateDirection() -- Update direction every frame (optional)
+	
+	
+end)
+
+
+
+local2local.Event:Connect(function(holding)
+	if holding == true then
+		Mt = 0.3
+	else
+		Mt = 1
+	end
+	
+	
+end)
+
+
+
+
+
+local function toggleSprint(toggled) 
+	if toggled then
+		status = "sprinting"
+	else
+		status = "walking"
+	end
+	Mt = if status == "sprinting" then 1.3 else 1
+end
+
+local function toggleSneak(toggled) 
+	if toggled then
+		status = "sneaking"
+		SneakToggleEvent:FireServer(true)
+	else
+		status = "walking"
+		SneakToggleEvent:FireServer(false)
+	end
+	Mt = if status == "sneaking" then 0.3 else 1
+end
+
+-- Detect when keys are pressed
+UIS.InputBegan:Connect(function(input, processed)
+	if input.UserInputType == Enum.UserInputType.Keyboard and not processed then
+		if input.KeyCode == Enum.KeyCode.W then
+			wPressed = true
+			--wBtn.BackgroundTransparency = 0.2
+		elseif input.KeyCode == Enum.KeyCode.A then
+			aPressed = true
+			--aBtn.BackgroundTransparency = 0.2
+		elseif input.KeyCode == Enum.KeyCode.S then
+			sPressed = true
+			--sBtn.BackgroundTransparency = 0.2
+		elseif input.KeyCode == Enum.KeyCode.D then
+			dPressed = true
+			--dBtn.BackgroundTransparency = 0.2
+		elseif input.KeyCode == Enum.KeyCode.LeftShift and Mt == 1 then
+			toggleSprint(true)
+		elseif input.KeyCode == Enum.KeyCode.LeftControl then
+			toggleSneak(true)
+		elseif input.KeyCode == Enum.KeyCode.Space then
+			spacePressed = true
+			--spaceBtn.BackgroundTransparency = 0.2
+		end
+	end
+end)
+
+-- Detect when keys are released
+UIS.InputEnded:Connect(function(input, processed)
+	if input.UserInputType == Enum.UserInputType.Keyboard and not processed then
+		if input.KeyCode == Enum.KeyCode.W then
+			wPressed = false
+		--	wBtn.BackgroundTransparency = 0.6
+		elseif input.KeyCode == Enum.KeyCode.A then
+			aPressed = false
+		--	aBtn.BackgroundTransparency = 0.6
+		elseif input.KeyCode == Enum.KeyCode.S then
+			sPressed = false
+			--sBtn.BackgroundTransparency = 0.6
+		elseif input.KeyCode == Enum.KeyCode.D then
+			dPressed = false
+			--dBtn.BackgroundTransparency = 0.6
+		elseif input.KeyCode == Enum.KeyCode.LeftShift and Mt == 1 then
+			toggleSprint(false)
+		elseif input.KeyCode == Enum.KeyCode.LeftControl then
+			toggleSneak(false)
+		elseif input.KeyCode == Enum.KeyCode.Space then
+			spacePressed = false
+			--spaceBtn.BackgroundTransparency = 0.6
+		end
+	end
+end)
+
+
+
+
+
+
+-- Define Physical Properties to avoid bugs
+local function setPlayerPhysicalProperties(player)
+	local character = player.Character or player.CharacterAdded:Wait()
+
+	-- Define the custom physical properties with minimum values
+	local physicalProperties = PhysicalProperties.new(0.01, 0, 0, 0, 0)
+
+	-- Apply these properties to each part of the character
+	for _, part in pairs(character:GetChildren()) do
+		if part:IsA("BasePart") then
+			part.CustomPhysicalProperties = physicalProperties
+		end
+		if part:IsA("Humanoid") then
+			part.JumpHeight = 0
+			part.BodyHeightScale.Value = 10
+		end
+	end
+end
+
+-- Apply properties to all players currently in the game
+for _, player in pairs(game.Players:GetPlayers()) do
+	--setPlayerPhysicalProperties(player)
+end
+
+-- Automatically apply properties to players who join later
+game.Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function()
+		--setPlayerPhysicalProperties(player)
+	end)
+end)
