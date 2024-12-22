@@ -1,0 +1,284 @@
+local Players = game:GetService("Players")
+local SendPacket = game.ReplicatedStorage.SendPacket
+local MovementEvent = game.ReplicatedStorage:WaitForChild("MovementEvent")
+local RunService = game:GetService("RunService")
+local HashMap = require(game.ReplicatedStorage.Modules.HashMap)
+
+
+
+local function addLinVelToCharacter(character)
+	local rigRootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rigRootPart then
+		warn("HumanoidRootPart not found for character:", character.Name)
+		return
+	end
+
+	-- Ensure there's a RootAttachment
+	local rootAttachment = rigRootPart:FindFirstChild("RootAttachment")
+	if not rootAttachment then
+		rootAttachment = Instance.new("Attachment")
+		rootAttachment.Name = "RootAttachment"
+		rootAttachment.Parent = rigRootPart
+	end
+
+	-- Add LinearVelocity if not already present
+	if not rigRootPart:FindFirstChild("LinearVelocity") then
+		local linearVelocity = Instance.new("LinearVelocity")
+		linearVelocity.Attachment0 = rootAttachment
+		linearVelocity.MaxForce = math.huge
+		linearVelocity.VectorVelocity = Vector3.zero -- Start with no velocity
+		linearVelocity.Parent = rigRootPart
+		print("LinearVelocity added to:", rigRootPart.Name)
+	else
+		print("LinearVelocity already exists for:", rigRootPart.Name)
+	end
+end
+
+MovementEvent.OnServerEvent:Connect(function(player, velocity)
+	local character = player.Character
+	if not character then return end
+
+	local rigRootPart = character:FindFirstChild("HumanoidRootPart")
+	if not rigRootPart then return end
+
+	local linVel = rigRootPart:FindFirstChild("LinearVelocity")
+	if linVel then
+		linVel.VectorVelocity = velocity
+--		print("Updated VectorVelocity for", player.Name, "to:", velocity)
+	else
+		warn("LinearVelocity not found for", player.Name)
+	end
+end)
+
+
+local function onPlayerAdded(player)
+	player.CharacterAdded:Connect(function(character)
+		--addLinVelToCharacter(character)
+	end)
+end
+
+Players.PlayerAdded:Connect(onPlayerAdded)
+
+--SendPacket.OnServerEvent:Connect(function(player, packet)
+	
+
+
+	
+	--print("Packet received from:", player.Name)
+	--print(packet)
+
+	--local target = packet.RayHit
+	--if not target then
+	--	warn("No valid target in packet.")
+	--	return
+	--end
+	
+	--local hitPlayer = packet.Player
+	--local character = hitPlayer.Character or hitPlayer.CharacterAdded:Wait()
+	--local rootPart = character:WaitForChild("HumanoidRootPart")
+	--local humanoid = character:WaitForChild("Humanoid")
+	--local linearVelocity = rootPart:FindFirstChild("LinearVelocity")
+	
+	--rootPart.AssemblyLinearVelocity = packet.KnockBack * 100
+	--linearVelocity.VectorVelocity = packet.KnockBack  + Vector3.new(0,1,0)
+	
+	--SendPacket:FireClient(hitPlayer, packet.KnockBack, packet.Damage)
+	
+--end)
+
+local targetedPlayerRootPart
+SendPacket.OnServerEvent:Connect(function(player, packet)
+	print("Packet received from:", player.Name)
+	print(packet)
+
+	-- Validate RayHit
+	local target = packet.RayHit
+	if not target then
+		warn("No valid target in packet.")
+		return
+	end
+
+	-- Find the model containing the hit part
+	local model = target:FindFirstAncestorOfClass("Model")
+	if not model or not model:FindFirstChild("Humanoid") or not model:FindFirstChild("HumanoidRootPart") then
+		warn("No valid humanoid model found for target.")
+		return
+	end
+
+	local humanoid = model:FindFirstChild("Humanoid")
+	local rootPart = model:FindFirstChild("HumanoidRootPart")
+	targetedPlayerRootPart = rootPart
+	-- Ensure the LinearVelocity exists on the rootPart
+	local linearVelocity = rootPart:FindFirstChild("LinearVelocity")
+	if not linearVelocity then
+		print("no linvel found")
+	end
+
+	HashMap:Set("KnockBack", packet.KnockBack)
+	-- Apply knockback to the model
+	--linearVelocity.VectorVelocity = packet.KnockBack -- Add some upward force
+
+	-- Optional: Debugging
+	--print("Knockback applied to model:", model.Name, "with velocity:", linearVelocity.VectorVelocity)
+
+	-- Optionally handle damage or other packet properties if needed
+	-- humanoid:TakeDamage(packet.Damage)
+end)
+
+
+
+
+local tickConstant = 60
+local McRbxRatio = 1.408
+local St = 1
+local canJump
+
+
+local function isOnGround(rootPart)
+	--local rootPart = character:FindFirstChild("HumanoidRootPart")
+	if rootPart then
+		local direction = Vector3.new(0, -3, 0)
+		local params = RaycastParams.new()
+		params.FilterDescendantsInstances = {character}
+		params.FilterType = Enum.RaycastFilterType.Exclude
+
+		local characterSize = Vector3.new(2, 7.1, 2)
+
+		local offsets = {
+			Vector3.new(0, 0, 0), -- Center
+			Vector3.new(-characterSize.X / 2, 0, -characterSize.Z / 2), -- Back-left
+			Vector3.new(characterSize.X / 2, 0, -characterSize.Z / 2), -- Back-right
+			Vector3.new(-characterSize.X / 2, 0, characterSize.Z / 2), -- Front-left
+			Vector3.new(characterSize.X / 2, 0, characterSize.Z / 2), -- Front-right
+		}
+
+		for _, offset in ipairs(offsets) do
+			local origin = rootPart.Position + offset
+			local result = workspace:Raycast(origin, direction, params)
+
+			if result then
+				canJump = true
+				return true
+			end
+		end
+
+		canJump = false
+		return false
+	end
+end
+
+local function applyPhysics(input, HRP)
+	
+		
+	local yVelocity = input.Y --/ (60*(1/(3*0.28)))
+	local xVelocity = input.X --/ (tickConstant*McRbxRatio)
+	local ZVelocity = input.Z --/ (tickConstant*McRbxRatio)
+	
+	local momentumY = (yVelocity - 0.08/3) * 0.98^(1/3)
+
+	local momentumX = xVelocity*(St*0.91)^(1/3)
+	local momentumZ = ZVelocity*(St*0.91)^(1/3)
+
+	if math.abs(momentumX) < 0.005 then momentumX = 0 end
+	if math.abs(momentumZ) < 0.005 then momentumZ = 0 end
+
+
+
+	--velocity = Vector3.new(momentumX + accelerationX, 0, momentumZ + accelerationZ)
+	
+	local hashVelocity = Vector3.new(momentumX,momentumY,momentumZ)
+
+	local finalVelocity = Vector3.new((momentumX) * tickConstant * McRbxRatio, momentumY*60*(1/(3*0.28)), (momentumZ) * tickConstant * McRbxRatio)
+	local linearVelocity = HRP:FindFirstChild("LinearVelocity")
+	linearVelocity.VectorVelocity = finalVelocity
+	
+	print(hashVelocity.Magnitude)
+	
+	if hashVelocity.Magnitude > 1 then
+		HashMap:Remove("KnockBack", input)
+		warn("Player is on gorund")
+	else
+		HashMap:Replace("KnockBack", input, hashVelocity)
+	end
+	
+	
+	-- put this new velocity into the hashmap
+	-- if finalvelocity.Magnitude < 0.1 then delete it from hashmap. 
+end
+
+
+local targetInterval = 1 / 60 -- Target: 60 updates per second
+local timeAccumulator = 0 -- Tracks time between updates
+
+
+RunService.Heartbeat:Connect(function(deltaTime)
+	timeAccumulator += deltaTime -- Accumulate elapsed time
+
+	-- Check if enough time has passed to update
+	while timeAccumulator >= targetInterval do
+		
+		--check hashmap, and apply physics
+		local KBs = HashMap:Get("KnockBack")
+		if KBs then
+			print(KBs)
+			for key,value in ipairs(KBs)  do
+				
+				applyPhysics(value, targetedPlayerRootPart)
+				
+			end
+		end
+		
+		
+		timeAccumulator -= targetInterval -- Subtract target interval
+	end
+
+	
+
+
+end)
+
+
+
+
+-- Define Physical Properties to avoid bugs
+local function setPlayerPhysicalProperties(player)
+	
+	local character = player.Character or player.CharacterAdded:Wait()
+	local rootPart = character:WaitForChild("HumanoidRootPart")
+	local humanoid = character:WaitForChild("Humanoid")
+		--humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+	local linearVelocity = Instance.new("LinearVelocity")
+
+	--rootPart:setNetworkOwner(nil)
+
+	linearVelocity.Attachment0 = rootPart:FindFirstChild("RootAttachment") or Instance.new("Attachment", rootPart)
+	linearVelocity.MaxForce = math.huge
+	linearVelocity.Parent = rootPart
+
+	-- Define the custom physical properties with minimum values
+	local physicalProperties = PhysicalProperties.new(0.01, 0, 0, 0, 0)
+
+	-- Apply these properties to each part of the character
+	for _, part in pairs(character:GetChildren()) do
+		if part:IsA("BasePart") then
+			part.CustomPhysicalProperties = physicalProperties
+		end
+		if part:IsA("Humanoid") then
+			part.JumpHeight = 0
+			--part.BodyHeightScale.Value = 10
+		end
+	end
+end
+
+-- Apply properties to all players currently in the game
+for _, player in pairs(game.Players:GetPlayers()) do
+	setPlayerPhysicalProperties(player)
+end
+
+-- Automatically apply properties to players who join later
+game.Players.PlayerAdded:Connect(function(player)
+	player.CharacterAdded:Connect(function()
+		setPlayerPhysicalProperties(player)
+	end)
+end)
+
