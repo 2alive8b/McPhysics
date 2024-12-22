@@ -1,0 +1,49 @@
+local HashMap = {}
+
+-- Table to store key-value pairs
+local dataStore = {}
+
+-- Function to add values to a key's table
+function HashMap:Set(key, value)
+	-- If the key doesn't exist, create a new table
+	if not dataStore[key] then
+		dataStore[key] = {}
+	end
+	-- Insert the value into the table
+	table.insert(dataStore[key], value)
+end
+
+-- Function to retrieve a value by key
+function HashMap:Get(key)
+	return dataStore[key]
+end
+
+
+-- Function to replace a value in a key's table
+function HashMap:Replace(key, oldValue, newValue)
+	local values = dataStore[key]
+	if values then
+		for i, v in ipairs(values) do
+			if v == oldValue then
+				values[i] = newValue
+				return true -- Replacement successful
+			end
+		end
+	end
+	return false -- Old value not found
+end
+
+-- Function to remove a value from a key's table
+function HashMap:Remove(key, valueToRemove)
+	local values = dataStore[key]
+	if values then
+		for i, v in ipairs(values) do
+			if v == valueToRemove then
+				table.remove(values, i)
+				return true -- Removal successful
+			end
+		end
+	end
+	return false -- Value not found
+end
+return HashMap
