@@ -1,0 +1,48 @@
+-- Lock First Person and Hide Cursor LocalScript
+
+local player = game.Players.LocalPlayer
+local camera = game.Workspace.CurrentCamera
+local UIS = game:GetService("UserInputService")
+local character = player.Character or player.CharacterAdded:Wait()
+local rootPart = character:WaitForChild("HumanoidRootPart")
+local humanoid = character:WaitForChild("Humanoid")
+
+-- Function to lock the camera in first person
+local function lockFirstPerson()
+	player.CameraMode = Enum.CameraMode.LockFirstPerson -- Locks the player in first person
+	camera.FieldOfView = 70 -- Standard FOV, adjust if needed
+	camera.HeadLocked = false
+end
+
+-- Function to hide the cursor
+local function hideCursor()
+	UIS.MouseIconEnabled = false -- Disables the mouse icon
+end
+
+function set_Camera_Offset()
+	humanoid.CameraOffset = Vector3.new(humanoid.CameraOffset.X, 1.05, humanoid.CameraOffset.Z) -- Referencing X and Z axes as their current value, so I do not know, if you maybe change them during your game, so it remains the same.
+end;
+
+-- Setting up the camera and hiding the cursor when the player spawns
+lockFirstPerson()
+hideCursor()
+set_Camera_Offset()
+
+-- Make sure the player can’t zoom out
+player.CameraMaxZoomDistance = 0.5
+player.CameraMinZoomDistance = 0.5
+
+-- Ensure that if the camera is changed, it gets reset
+camera.Changed:Connect(function(property)
+	if property == "CameraType" or property == "FieldOfView" then
+		lockFirstPerson()
+	end
+end)
+
+-- Reset cursor visibility if toggled
+UIS.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		hideCursor()
+	end
+end)
+
